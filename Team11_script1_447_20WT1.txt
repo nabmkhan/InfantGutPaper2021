@@ -1,0 +1,209 @@
+#!/bin/bash
+
+# Team 15; November 1st 2020
+# Prepares demultiplexed infant data for downstream analysis using QIIME2
+# Outputs needed files to ~/infant-output/
+
+clear
+echo " "
+echo "Please run me with: nohup ./InfantQIIME2.sh 2>&1 > scriptinfo.txt &"
+echo "You can then watch the progress of this script using: watch -n 5 'tail -n 15 scriptinfo.txt'"
+echo " "
+echo "Exit now with CTRL + C if you have not (you have 30s)"
+sleep 30
+
+#  Copy infant data folder to home folder
+echo "Making directory and copying demultiplexed files/metadata"
+cp -r /mnt/datasets/project_2/infant ~
+cd ~/infant
+
+# Preparing metadata
+awk 'BEGIN{FS=OFS="\t"} $2=="Adult" {$25=""}1' infant_metadata.txt | \
+awk 'BEGIN{FS=OFS="\t"} $2=="Adult" {$8=""}1' | \
+awk '{gsub("not provided","")}1' | \
+awk '{gsub("not collected","")}1' | \
+awk '{gsub("not applicable","")}1' > infant_metadata_NA.txt
+
+#  Importing demultiplexed dataset from shared drive 
+echo "Importing dataset"
+qiime tools import \
+  --type 'SampleData[SequencesWithQuality]' \
+  --input-path /mnt/datasets/project_2/infant/infant_manifest.txt \
+  --output-path demux.qza \
+  --input-format SingleEndFastqManifestPhred33V2
+
+#  Summary of demultiplexing results
+qiime demux summarize \
+  --i-data demux.qza \
+  --o-visualization demux.qzv
+
+#  View demux.qzv -> kept >30 QS; 0-150 position
+#  DADA2 quality control
+echo "Performing quality control"
+qiime dada2 denoise-single \
+  --i-demultiplexed-seqs demux.qza \
+  --p-trim-left 0 \
+  --p-trunc-len 150 \
+  --o-representative-sequences rep-seqs.qza \
+  --o-table table.qza \
+  --o-denoising-stats stats.qza
+
+#  Metadata tabulation
+  qiime metadata tabulate \
+  --m-input-file stats.qza \
+  --o-visualization stats.qzv
+
+#  FeatureTable and FeatureData summaries
+qiime feature-table summarize \
+  --i-table table.qza \
+  --o-visualization table.qzv \
+  --m-sample-metadata-file infant_metadata_NA.txt
+
+qiime feature-table tabulate-seqs \
+  --i-data rep-seqs.qza \
+  --o-visualization rep-seqs.qzv
+
+#  Generation of phylogenic tree
+echo "Generating phylogenic tree"
+qiime phylogeny align-to-tree-mafft-fasttree \
+  --i-sequences rep-seqs.qza \
+  --o-alignment aligned-rep-seqs.qza \
+  --o-masked-alignment masked-aligned-rep-seqs.qza \
+  --o-tree unrooted-tree.qza \
+  --o-rooted-tree rooted-tree.qza
+
+#  Alpha Rarefaction Plotting
+qiime diversity alpha-rarefaction \
+  --i-table table.qza \
+  --i-phylogeny rooted-tree.qza \
+  --p-max-depth 20000 \
+  --m-metadata-file infant_metadata_NA.txt \
+  --o-visualization alpha-rarefaction.qzv
+
+#  Filtering Samples
+#  Want samples only with baby_delivery and feed data
+echo "Filtering desired delivery and feed samples"
+qiime feature-table filter-samples \
+  --i-table table.qza \
+  --m-metadata-file infant_metadata_NA.txt \
+  --p-where "[baby_delivery] IN ('vaginal', 'c-section') AND [life_stage]='Infant' OR [life_stage]='Adult'" \
+  --o-filtered-table delivery-filtered-table.qza
+
+qiime feature-table filter-samples \
+  --i-table delivery-filtered-table.qza \
+  --m-metadata-file infant_metadata_NA.txt \
+  --p-where "[feed] IN ('breast', 'combined', 'formula') AND [life_stage]='Infant' OR [life_stage]='Adult'" \
+  --o-filtered-table feed-delivery-filtered-table.qza
+
+#  FeatureTable Filtered 
+qiime feature-table summarize \
+  --i-table feed-delivery-filtered-table.qza \
+  --o-visualization feed-delivery-filtered-table.qzv \
+  --m-sample-metadata-file infant_metadata_NA.txt
+
+#  Generating diversity core metrics
+#  Selected alpha rarefraction depth of: 13000
+echo "Generating alpha and beta diversity plots"
+qiime diversity core-metrics-phylogenetic \
+  --i-phylogeny rooted-tree.qza \
+  --i-table feed-delivery-filtered-table.qza \
+  --p-sampling-depth 13000 \
+  --m-metadata-file infant_metadata_NA.txt \
+  --output-dir core-metrics-results
+
+#  Generating alpha diversity plots
+#  Observed Features
+qiime diversity alpha-group-significance \
+  --i-alpha-diversity core-metrics-results/observed_features_vector.qza \
+  --m-metadata-file infant_metadata_NA.txt \
+  --o-visualization core-metrics-results/observed-features-group-significance.qzv
+#  Faith's
+qiime diversity alpha-group-significance \
+  --i-alpha-diversity core-metrics-results/faith_pd_vector.qza \
+  --m-metadata-file infant_metadata_NA.txt \
+  --o-visualization core-metrics-results/faith-pd-group-significance.qzv
+#  Shannon's
+qiime diversity alpha-group-significance \
+  --i-alpha-diversity core-metrics-results/shannon_vector.qza \
+  --m-metadata-file infant_metadata_NA.txt \
+  --o-visualization core-metrics-results/shannon-vector-group-significance.qzv
+#  Pielou's
+qiime diversity alpha-group-significance \
+  --i-alpha-diversity core-metrics-results/evenness_vector.qza \
+  --m-metadata-file infant_metadata_NA.txt \
+  --o-visualization core-metrics-results/evenness-group-significance.qzv
+
+#  Copying visual metrics to output folder
+mkdir ~/infant-output
+cp -r core-metrics-results/*.qzv ~/infant-output/
+
+#  Taxonomy Analysis
+#  Download Silva 16s V132 (remember to cite)
+echo "Performing taxonomy analysis"
+if test -f "silva-138-99-nb-classifier.qza"
+    then 
+        echo "No need to download 16s database"
+    else
+        wget https://data.qiime2.org/2020.8/common/silva-138-99-nb-classifier.qza
+fi
+#  Perform Analysis
+echo "Analyzing . . . this may take some time"
+qiime feature-classifier classify-sklearn \
+  --i-classifier silva-138-99-nb-classifier.qza \
+  --i-reads rep-seqs.qza \
+  --o-classification taxonomy.qza
+
+qiime metadata tabulate \
+  --m-input-file taxonomy.qza \
+  --o-visualization taxonomy.qzv
+
+# Generation of taxonomy bar plots and copying to output folder
+qiime taxa barplot \
+  --i-table feed-delivery-filtered-table.qza \
+  --i-taxonomy taxonomy.qza \
+  --m-metadata-file infant_metadata_NA.txt \
+  --o-visualization taxa-bar-plots.qzv
+
+cp taxa-bar-plots.qzv ~/infant-output/
+
+# ASV Filtering for mitochondria, chloroplast, archea
+qiime taxa filter-table \
+  --i-table feed-delivery-filtered-table.qza \
+  --i-taxonomy taxonomy.qza \
+  --p-include p__ \
+  --p-exclude mitochondria,chloroplast,archea,eukaryota \
+  --o-filtered-table table-with-feed-delivery-no-mitochondria-no-chloroplast-no-archea.qza
+
+# Copying final table to output
+echo "Exporting feature table, taxonomy and phylogenic tree"
+qiime tools export \
+  --input-path table-with-feed-delivery-no-mitochondria-no-chloroplast-no-archea.qza \
+  --output-path exported-feature-table-feed-delivery-no-mit-chlo-arc
+
+qiime tools export \
+  --input-path taxonomy.qza \
+  --output-path exported-feature-table-feed-delivery-no-mit-chlo-arc
+
+qiime tools export \
+  --input-path unrooted-tree.qza \
+  --output-path exported-phylogenetic-tree
+
+#  Convert biom to tsv and adding tax to feature table
+echo "Finishing touches"
+awk '{gsub("Feature ID","#OTUID")}1' exported-feature-table-feed-delivery-no-mit-chlo-arc/taxonomy.tsv | \
+awk '{gsub("Taxon","taxonomy")}1' | \
+awk '{gsub("Confidence","confidence")}1' > exported-feature-table-feed-delivery-no-mit-chlo-arc/taxonomy_rename.tsv
+biom add-metadata \
+-i exported-feature-table-feed-delivery-no-mit-chlo-arc/feature-table.biom \
+-o exported-feature-table-feed-delivery-no-mit-chlo-arc/table-with-taxonomy.biom \
+--observation-metadata-fp exported-feature-table-feed-delivery-no-mit-chlo-arc/taxonomy_rename.tsv \
+--sc-separated taxonomy
+
+cp -r exported* ~/infant-output/
+
+biom convert -i ~/infant-output/exported-feature-table-feed-delivery-no-mit-chlo-arc/table-with-taxonomy.biom \
+-o ~/infant-output/exported-feature-table-feed-delivery-no-mit-chlo-arc/table-with-taxonomy.tsv --to-tsv
+cp infant_metadata_NA.txt ~/infant-output/infant_metadata_NA.tsv
+
+echo "Process complete"
+echo "Files of interest are located in 'infant-output' in your home folder"

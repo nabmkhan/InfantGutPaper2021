@@ -1,0 +1,833 @@
+# Start Date: Nov 10th 2020 #
+### Prep Steps ###
+# Loading packages
+library(tidyverse)
+library(vegan)
+library(phyloseq)
+library(DESeq2)
+library(ape)
+library(devtools)
+# Loading Files
+biom_file <-
+  import_biom(
+    "exported-feature-table-feed-delivery-no-mit-chlo-arc/table-with-taxonomy.biom"
+  )
+metadatafile <- import_qiime_sample_data("infant_metadata_NA.tsv")
+treefile <-
+  read_tree_greengenes("exported-phylogenetic-tree/tree.nwk")
+treefile <- multi2di(treefile)
+# Github Pairwise function
+install_github("pmartinezarbizu/pairwiseAdonis/pairwiseAdonis")
+library(pairwiseAdonis)
+# Setup helper functions (ignore
+# the setup, the functions will
+# help you) Calculate relative
+# abundance
+calculate_RA <- function(x)
+  x / sum(x)
+# define this function below,
+# which we'll use in a minute
+gm_mean <- function(x, na.rm = TRUE) {
+  exp(sum(log(x[x > 0]), na.rm = na.rm) / length(x))
+}
+# Combine into phyloseq object
+physeq <- merge_phyloseq(biom_file,
+                         metadatafile, treefile)
+# Rename rank names for proper
+# taxonomic ranks
+colnames(tax_table(physeq)) <- c("Kingdom",
+                                 "Phylum",
+                                 "Class",
+                                 "Order",
+                                 "Family",
+                                 "Genus",
+                                 "Species")
+# Set seed
+set.seed(215)
+# Rarefy to 13000
+physeq_rar <- rarefy_even_depth(physeq,
+                                sample.size = 13000)
+# Keep only abundant ASVs First
+# determine counts of ASV across
+# all samples
+total_counts <- taxa_sums(physeq_rar)
+# Calculate relative abundance
+# for each ASV
+relative_abundance <- calculate_RA(total_counts)
+# Determine which ASVs are more
+# abundant than 0.1% Change this
+# if you want a different cutoff
+# (0.001 = 0.1%)
+abundant <- relative_abundance >
+  0.001
+abundant_taxa <- prune_taxa(abundant,
+                            physeq_rar)
+# Defining Terms
+physeq_RA <- transform_sample_counts(physeq_rar,
+                                     calculate_RA)
+family <- tax_glom(abundant_taxa,
+                   taxrank = "Family", NArm = FALSE)
+family_RA <- tax_glom(physeq_RA,
+                      taxrank = "Family", NArm = FALSE)
+# Set Theme
+theme_set(theme_classic(base_size = 16,
+                        base_family = "Arial"))
+### Beta Diversity Plots ###
+# Beta Diversity Plot For Feed
+physeq_RAf <- subset_samples(physeq_RA,
+                             feed != "") %>% subset_samples(feed !=
+                                                              "combined") %>% subset_samples(feed !=
+                                                                                               "NA") %>% subset_samples(age_category == "6 months")
+wuordf <- ordinate(physeq_RAf, method = "PCoA",
+                   distance = "wunifrac")
+uordf <- ordinate(physeq_RAf, method = "PCoA",
+                  distance = "unifrac")
+jordf <- ordinate(physeq_RAf, method = "PCoA",
+                  distance = "jaccard")
+bordf <- ordinate(physeq_RAf, method = "PCoA",
+                  distance = "bray")
+# PERMAOVA for feed
+metadataf <- data.frame(sample_data(physeq_RAf))
+abundance_unifracf <- UniFrac(
+  physeq_RAf,
+  weighted = TRUE,
+  normalized = TRUE,
+  parallel = TRUE
+)
+sink(file = "R-DiversityPlots/feed-pvalue.txt")
+permanovaf <- adonis(abundance_unifracf ~
+                       feed, data = metadataf)
+print(permanovaf)
+pairwise.permanovaf <-
+  pairwiseAdonis::pairwise.adonis(abundance_unifracf,
+                                  metadataf$feed)
+print(pairwise.permanovaf)
+sink(file = NULL)
+# Plot data for feed
+plot_ordination(physeq_RAf,
+                wuordf,
+                type = "sample",
+                color = "feed",
+                shape = "feed") + scale_colour_discrete("Feed") +
+  theme(
+    aspect.ratio = 1,
+    panel.background = element_rect(fill = "white",
+                                    colour = "black"),
+    panel.grid.major = element_line(
+      size = 0.5,
+      linetype = "solid",
+      colour = "grey"
+    ),
+    panel.grid.minor = element_line(
+      size = 0.15,
+      linetype = "solid",
+      colour = "grey"
+    )
+  ) +
+  stat_ellipse() + # colors for the different groups
+  # (here subject 1 and 2)
+  scale_colour_manual(values = c("#1B9E77",
+                                 "#D95F02")) + scale_shape_manual(values = c(15,
+                                                                             16)) + labs(color = "Feed", shape = "Feed")
+ggsave(path = "R-DiversityPlots",
+       filename = "Feed WUnifrac.png")
+plot_ordination(physeq_RAf, uordf,
+                type = "sample", color = "feed") +
+  scale_colour_discrete("Feed") +
+  theme(
+    aspect.ratio = 1,
+    panel.background = element_rect(fill = "white",
+                                    colour = "black"),
+    panel.grid.major = element_line(
+      size = 0.5,
+      linetype = "solid",
+      colour = "grey"
+    ),
+    panel.grid.minor = element_line(
+      size = 0.15,
+      linetype = "solid",
+      colour = "grey"
+    )
+  ) +
+  stat_ellipse()
+ggsave(path = "R-DiversityPlots",
+       filename = "Feed Unifrac.png")
+plot_ordination(physeq_RAf, jordf,
+                type = "sample", color = "feed") +
+  scale_colour_discrete("Feed") +
+  theme(
+    aspect.ratio = 1,
+    panel.background = element_rect(fill = "white",
+                                    colour = "black"),
+    panel.grid.major = element_line(
+      size = 0.5,
+      linetype = "solid",
+      colour = "grey"
+    ),
+    panel.grid.minor = element_line(
+      size = 0.15,
+      linetype = "solid",
+      colour = "grey"
+    )
+  ) +
+  stat_ellipse()
+ggsave(path = "R-DiversityPlots",
+       filename = "Feed Jaccard.png")
+plot_ordination(physeq_RAf, bordf,
+                type = "sample", color = "feed") +
+  scale_colour_discrete("Feed") +
+  theme(
+    aspect.ratio = 1,
+    panel.background = element_rect(fill = "white",
+                                    colour = "black"),
+    panel.grid.major = element_line(
+      size = 0.5,
+      linetype = "solid",
+      colour = "grey"
+    ),
+    panel.grid.minor = element_line(
+      size = 0.15,
+      linetype = "solid",
+      colour = "grey"
+    )
+  ) +
+  stat_ellipse()
+ggsave(path = "R-DiversityPlots",
+       filename = "Feed Bray.png")
+# Beta Diversity Plot For Mode
+physeq_RAm <- subset_samples(physeq_RA,
+                             baby_delivery != "") %>% subset_samples(age_category == "0.5 months")
+wuordm <- ordinate(physeq_RAm, method = "PCoA",
+                   distance = "wunifrac")
+uordm <- ordinate(physeq_RAm, method = "PCoA",
+                  distance = "unifrac")
+jordm <- ordinate(physeq_RAm, method = "PCoA",
+                  distance = "jaccard")
+bordm <- ordinate(physeq_RAm, method = "PCoA",
+                  distance = "bray")
+# PERMAOVA for Mode
+metadatam <- data.frame(sample_data(physeq_RAm))
+abundance_unifracm <- UniFrac(
+  physeq_RAm,
+  weighted = TRUE,
+  normalized = TRUE,
+  parallel = TRUE
+)
+sink(file = "R-DiversityPlots/mode-pvalue.txt")
+permanovam <- adonis(abundance_unifracm ~
+                       baby_delivery, data = metadatam)
+print(permanovam)
+pairwise.permanovam <-
+  pairwiseAdonis::pairwise.adonis(abundance_unifracm,
+                                  metadatam$baby_delivery)
+print(pairwise.permanovam)
+table()
+sink(file = NULL)
+# Plot data for Mode
+plot_ordination(physeq_RAm,
+                wuordm,
+                type = "sample",
+                color = "baby_delivery",
+                shape = "baby_delivery") + scale_colour_discrete("Delivery") +
+  theme(
+    aspect.ratio = 1,
+    panel.background = element_rect(fill = "white",
+                                    colour = "black"),
+    panel.grid.major = element_line(
+      size = 0.5,
+      linetype = "solid",
+      colour = "grey"
+    ),
+    panel.grid.minor = element_line(
+      size = 0.15,
+      linetype = "solid",
+      colour = "grey"
+    )
+  ) +
+  stat_ellipse() + # colors for the different groups
+  # (here subject 1 and 2)
+  scale_colour_manual(values = c("#E6AB02",
+                                 "#66A61E")) + scale_shape_manual(values = c(15,
+                                                                             16)) + labs(color = "Delivery",
+                                                                                         shape = "Delivery")
+ggsave(path = "R-DiversityPlots",
+       filename = "Mode WUnifrac.png")
+plot_ordination(physeq_RAm, uordm,
+                type = "sample", color = "baby_delivery") +
+  scale_colour_discrete("Delivery") +
+  theme(
+    aspect.ratio = 1,
+    panel.background = element_rect(fill = "white",
+                                    colour = "black"),
+    panel.grid.major = element_line(
+      size = 0.5,
+      linetype = "solid",
+      colour = "grey"
+    ),
+    panel.grid.minor = element_line(
+      size = 0.15,
+      linetype = "solid",
+      colour = "grey"
+    )
+  ) +
+  stat_ellipse()
+ggsave(path = "R-DiversityPlots",
+       filename = "Mode Unifrac.png")
+plot_ordination(physeq_RAm, jordm,
+                type = "sample", color = "baby_delivery") +
+  scale_colour_discrete("Delivery") +
+  theme(
+    aspect.ratio = 1,
+    panel.background = element_rect(fill = "white",
+                                    colour = "black"),
+    panel.grid.major = element_line(
+      size = 0.5,
+      linetype = "solid",
+      colour = "grey"
+    ),
+    panel.grid.minor = element_line(
+      size = 0.15,
+      linetype = "solid",
+      colour = "grey"
+    )
+  ) +
+  stat_ellipse()
+ggsave(path = "R-DiversityPlots",
+       filename = "Mode Jaccard.png")
+plot_ordination(physeq_RAm, bordm,
+                type = "sample", color = "baby_delivery") +
+  scale_colour_discrete("Delivery") +
+  theme(
+    aspect.ratio = 1,
+    panel.background = element_rect(fill = "white",
+                                    colour = "black"),
+    panel.grid.major = element_line(
+      size = 0.5,
+      linetype = "solid",
+      colour = "grey"
+    ),
+    panel.grid.minor = element_line(
+      size = 0.15,
+      linetype = "solid",
+      colour = "grey"
+    )
+  ) +
+  stat_ellipse()
+ggsave(path = "R-DiversityPlots",
+       filename = "Mode Bray.png")
+### Differential Abundance Analysis
+### ###
+### Feature level analysis based on
+### Feed ###
+# Filter feed data to remove
+# 'combined' and NA feed
+physeq_feed <- subset_samples(family,
+                              feed != "combined") %>% subset_samples(feed !=
+                                                                       "") %>% subset_samples(age_category == "6 months")
+# Feature level analysis based on
+# feed
+deseq_feature_feed <- phyloseq_to_deseq2(physeq_feed,
+                                         ~ feed)
+# Calculate geometric mean
+geo_means_feed <- apply(counts(deseq_feature_feed),
+                        1, gm_mean)
+# Differential abundance analysis
+deseq_feature_feed <- estimateSizeFactors(deseq_feature_feed,
+                                          geoMeans = geo_means_feed)
+deseq_feature_feed <- DESeq(deseq_feature_feed,
+                            fitType = "local")
+feature_diff_abund_feed <- results(deseq_feature_feed)
+# Filter for significant features
+alpha <- 0.05
+significant_feature_feed <- as_tibble(feature_diff_abund_feed,
+                                      rownames = "feature")
+significant_feature_feed <- filter(significant_feature_feed,
+                                   padj < alpha)
+significant_feature_feed <- arrange(significant_feature_feed,
+                                    padj)
+# Get data table with taxonomic
+# info for each feature
+taxa_df_feed <- as_tibble(as.data.frame(tax_table(physeq_feed)),
+                          rownames = "feature")
+# Combine significant
+# features_feed with taxonomic
+# info table
+significant_feature_feed <- inner_join(significant_feature_feed,
+                                       taxa_df_feed) %>% arrange(log2FoldChange) %>%
+  mutate(subject = ifelse(log2FoldChange >
+                            0, "formula", "breast")) %>%
+  mutate(Family = str_sub(Family,
+                          4,-1))
+# Plot differential abundance for
+# feed by family
+significant_feature_feed %>% ggplot(aes(
+  x = -log2FoldChange,
+  y = reorder(Family,-log2FoldChange),
+  fill = subject
+)) + labs(fill = "Feed") +
+  ylab("Family") + xlab("Log2 Fold-Change") +
+  geom_col() + theme(
+    aspect.ratio = 1,
+    panel.background = element_rect(fill = "white",
+                                    colour = "black"),
+    panel.grid.major = element_line(
+      size = 0.5,
+      linetype = "solid",
+      colour = "grey"
+    ),
+    panel.grid.minor = element_line(
+      size = 0.15,
+      linetype = "solid",
+      colour = "grey"
+    )
+  ) +
+  theme_classic(base_size = 20) +
+  # colors for the different groups
+  # (here subject 1 and 2)
+  scale_fill_manual(values = c("#1B9E77",
+                               "#D95F02"))
+ggsave(path = "R-AbundancePlots",
+       filename = "Feed-Family.png")
+### Feature level analysis based on
+### Delivery ### Filter feed data
+### to remove 'none' delivery
+physeq_delivery <- subset_samples(family,
+                                  baby_delivery != "") %>% subset_samples(age_category == "0.5 months")
+deseq_feature_delivery <- phyloseq_to_deseq2(physeq_delivery,
+                                             ~ baby_delivery)
+geo_means_delivery <- apply(counts(deseq_feature_delivery),
+                            1, gm_mean)
+deseq_feature_delivery <-
+  estimateSizeFactors(deseq_feature_delivery,
+                      geoMeans = geo_means_delivery)
+deseq_feature_delivery <- DESeq(deseq_feature_delivery,
+                                fitType = "local")
+feature_diff_abund_delivery <- results(deseq_feature_delivery)
+significant_feature_delivery <-
+  as_tibble(feature_diff_abund_delivery,
+            rownames = "feature")
+significant_feature_delivery <-
+  filter(significant_feature_delivery,
+         padj < alpha)
+significant_feature_delivery <-
+  arrange(significant_feature_delivery,
+          padj)
+taxa_df_delivery <-
+  as_tibble(as.data.frame(tax_table(physeq_delivery)),
+            rownames = "feature")
+significant_feature_delivery <-
+  inner_join(significant_feature_delivery,
+             taxa_df_delivery) %>% arrange(log2FoldChange) %>%
+  mutate(subject = ifelse(log2FoldChange >
+                            0, "vaginal", "c-section")) %>%
+  mutate(Family = str_sub(Family,
+                          4,-1))
+# Plot differential abundance for
+# mode by family
+significant_feature_delivery %>%
+  ggplot(aes(
+    x = -log2FoldChange,
+    y = reorder(Family,-log2FoldChange),
+    fill = subject
+  )) + labs(fill = "Delivery") +
+  ylab("Family") + xlab("Log2 Fold-Change") +
+  geom_col() + theme(
+    aspect.ratio = 1,
+    panel.background = element_rect(fill = "white",
+                                    colour = "black"),
+    panel.grid.major = element_line(
+      size = 0.5,
+      linetype = "solid",
+      colour = "grey"
+    ),
+    panel.grid.minor = element_line(
+      size = 0.15,
+      linetype = "solid",
+      colour = "grey"
+    )
+  ) +
+  theme_classic(base_size = 20) +
+  # colors for the different groups
+  # (here subject 1 and 2)
+  scale_fill_manual(values = c("#E6AB02",
+                               "#66A61E"))
+ggsave(path = "R-AbundancePlots",
+       filename = "Mode-Family.png")
+### Pairwise Beta Diversity between
+### mother-child ###
+weighted_unifrac <- UniFrac(physeq_rar,
+                            weighted = TRUE, parallel = TRUE)
+bray_curtis <- vegdist(otu_table(physeq_rar))
+#### Calculate Mother-Infant beta
+#### diversity
+library(stringr)
+numextract <- function(string) {
+  str_extract(string, "\\-*\\d+\\.*\\d*")
+}
+library(abdiv)
+tree <- phy_tree(physeq_RA)
+tree <- multi2di(tree)
+abundance_table <- t(otu_table(physeq_RA))
+metadata <- data.frame(sample_data(physeq_RA))
+# create numeric age category
+metadata$age <- as.numeric(numextract(metadata$age_category))
+metadata$mother_age <- NA
+metadata$bray_curtis <- NA
+metadata$jaccard <- NA
+metadata$unweighted_unifrac <- NA
+metadata$weighted_unifrac <- NA
+for (r in 1:nrow(metadata)) {
+  if (metadata$life_stage[r] ==
+      "Infant") {
+    # chose the right mother for the
+    # infant
+    mother <- which(
+      metadata$anonymized_name ==
+        metadata$anonymized_name[r] &
+        metadata$life_stage ==
+        "Adult"
+    )
+    # chose the mother's data point
+    # with the youngest age
+    if (length(mother) > 0) {
+      mother <- mother[which(metadata[mother,]$age == min(metadata[mother,]$age))]
+      print(paste("Infant row: ",
+                  r, ", mother row:",
+                  mother, sep = ""))
+      # save the infant's age of the
+      # mother's data point
+      metadata[r, "mother_age"] <- metadata$age[mother]
+      # calculate distances
+      metadata[r, "bray_curtis"] <-
+        bray_curtis(abundance_table[r,], abundance_table[mother,])
+      metadata[r, "jaccard"] <- jaccard(abundance_table[r,], abundance_table[mother,])
+      metadata[r, "weighted_unifrac"] <-
+        weighted_unifrac(abundance_table[r,],
+                         abundance_table[mother,],
+                         tree,
+                         xy_labels = colnames(abundance_table))
+      metadata[r, "unweighted_unifrac"] <-
+        unweighted_unifrac(abundance_table[r,],
+                           abundance_table[mother,],
+                           tree,
+                           xy_labels = colnames(abundance_table))
+    }
+  }
+}
+# Plot boxplots for mode
+metadata$age_character <- as.factor(metadata$age)
+ggplot(
+  filter(metadata, baby_delivery !=
+           "", age != 9),
+  aes(x = age_character,
+      y = weighted_unifrac, fill = baby_delivery)
+) +
+  geom_boxplot() + scale_x_discrete(limits = as.character(c(seq(0.5,
+                                                                6, by = 0.5)))) + theme(
+                                                                  aspect.ratio = 1,
+                                                                  panel.background = element_rect(fill = "white",
+                                                                                                  colour = "black"),
+                                                                  panel.grid.major = element_line(
+                                                                    size = 0.5,
+                                                                    linetype = "solid",
+                                                                    colour = "grey"
+                                                                  ),
+                                                                  panel.grid.minor = element_line(
+                                                                    size = 0.15,
+                                                                    linetype = "solid",
+                                                                    colour = "grey"
+                                                                  )
+                                                                ) +
+  labs(fill = "Delivery") + ylab("Weighted Unifrac Distance") +
+  xlab("Infant Age (Months)") +
+  # colors for the different groups
+  # (here subject 1 and 2)
+  scale_fill_manual(values = c("#E6AB02",
+                               "#66A61E"))
+ggsave(path = "R-BoxPlots", filename = "Mode-Pairwise.png")
+# Plot boxplots for mode facet
+ggplot(
+  filter(metadata, baby_delivery !=
+           "", age != 9),
+  aes(x = age, y = weighted_unifrac,
+      fill = baby_delivery)
+) + geom_boxplot(aes(group = age)) +
+  # scale_x_discrete(limits =
+  # as.character(c(seq(0.5, 6, by =
+  # 0.5)))) +
+  theme(
+    aspect.ratio = 1,
+    panel.background = element_rect(fill = "white",
+                                    colour = "black"),
+    panel.grid.major = element_line(
+      size = 0.5,
+      linetype = "solid",
+      colour = "grey"
+    ),
+    panel.grid.minor = element_line(
+      size = 0.15,
+      linetype = "solid",
+      colour = "grey"
+    )
+  ) +
+  labs(fill = "Delivery") + ylab("Weighted Unifrac Distance") +
+  xlab("Infant Age (Months)") +
+  # colors for the different groups
+  # (here subject 1 and 2)
+  scale_fill_manual(values = c("#E6AB02",
+                               "#66A61E")) + geom_smooth(method = lm) +
+  facet_grid( ~ baby_delivery)
+ggsave(path = "R-BoxPlots", filename = "Mode-Pairwise-Facet.png")
+
+mode_csection_age_lm = lm(weighted_unifrac ~
+                            age,
+                          data = filter(metadata,
+                                        baby_delivery == "c-section"))
+
+sink(file = "R-BoxPlots/summaryfacetmode.txt")
+summary(mode_csection_age_lm)
+mode_vaginal_age_lm = lm(weighted_unifrac ~
+                           age,
+                         data = filter(metadata,
+                                       baby_delivery == "vaginal"))
+summary(mode_vaginal_age_lm)
+sink(file = NULL)
+
+
+# Plot boxplots for feed
+metadata$age_character <- as.factor(metadata$age)
+ggplot(
+  filter(metadata, feed != "",
+         feed != "combined", age != 9),
+  aes(x = age_character, y = weighted_unifrac,
+      fill = feed)
+) + geom_boxplot() +
+  scale_x_discrete(limits = as.character(c(seq(0.5,
+                                               6, by = 0.5)))) + theme(
+                                                 aspect.ratio = 1,
+                                                 panel.background = element_rect(fill = "white",
+                                                                                 colour = "black"),
+                                                 panel.grid.major = element_line(
+                                                   size = 0.5,
+                                                   linetype = "solid",
+                                                   colour = "grey"
+                                                 ),
+                                                 panel.grid.minor = element_line(
+                                                   size = 0.15,
+                                                   linetype = "solid",
+                                                   colour = "grey"
+                                                 )
+                                               ) +
+  labs(fill = "Feed") + ylab("Weighted Unifrac Distance") +
+  xlab("Infant Age (Months)") +
+  # colors for the different groups
+  # (here subject 1 and 2)
+  scale_fill_manual(values = c("#1B9E77",
+                               "#D95F02"))
+ggsave(path = "R-BoxPlots", filename = "Feed-Pairwise.png")
+
+
+
+# Plot boxplots for feed facet
+ggplot(
+  filter(metadata, feed != "",
+         feed != "combined", age != 9),
+  aes(x = age, y = weighted_unifrac,
+      fill = feed)
+) + geom_boxplot(aes(group = age)) +
+  # scale_x_discrete(limits =
+  # as.character(c(seq(0.5, 6, by =
+  # 0.5)))) +
+  theme(
+    aspect.ratio = 1,
+    panel.background = element_rect(fill = "white",
+                                    colour = "black"),
+    panel.grid.major = element_line(
+      size = 0.5,
+      linetype = "solid",
+      colour = "grey"
+    ),
+    panel.grid.minor = element_line(
+      size = 0.15,
+      linetype = "solid",
+      colour = "grey"
+    )
+  ) +
+  labs(fill = "Feed") + ylab("Weighted Unifrac Distance") +
+  xlab("Infant Age (Months)") +
+  # colors for the different groups
+  # (here subject 1 and 2)
+  scale_fill_manual(values = c("#1B9E77",
+                               "#D95F02")) + geom_smooth(method = lm) +
+  facet_grid( ~ feed)
+ggsave(path = "R-BoxPlots", filename = "Feed-Pairwise-facet.png")
+
+feed_breast_age_lm = lm(weighted_unifrac ~
+                          age, data = filter(metadata,
+                                             feed == "breast"))
+
+sink(file = "R-BoxPlots/summaryfacetfeed.txt")
+summary(feed_breast_age_lm)
+feed_formula_age_lm = lm(weighted_unifrac ~
+                           age, data = filter(metadata,
+                                              feed == "formula"))
+summary(feed_formula_age_lm)
+sink(file = NULL)
+
+
+### Regression Analysis of Infant
+### Beta Diversities ###
+ggplot(metadata, aes(x = age, y = weighted_unifrac,
+                     group = age)) + geom_boxplot() +
+  ylab("Weighted Unifrac Distance") +
+  xlab("Infant Age (Months)") +
+  theme(
+    aspect.ratio = 1,
+    panel.background = element_rect(fill = "white",
+                                    colour = "black"),
+    panel.grid.major = element_line(
+      size = 0.5,
+      linetype = "solid",
+      colour = "grey"
+    ),
+    panel.grid.minor = element_line(
+      size = 0.15,
+      linetype = "solid",
+      colour = "grey"
+    )
+  ) +
+  ggsave(path = "R-BoxPlots", filename = "Regression-Analysis.png")
+# Correlation
+cor.test(metadata$age, metadata$weighted_unifrac)
+# Regression
+weighted_unifrac_lm <- lm(weighted_unifrac ~
+                            age, data = metadata)
+summary(weighted_unifrac_lm)
+
+
+
+# Calculate p-values
+selectingdataage<- select(metadata, age)
+c <- as.vector(unique(selectingdataage$age))
+sink(file = "R-BoxPlots/feed_pvalue.txt")
+for (value in c) {
+  data <- filter(metadata, age == value, feed != "",
+                     feed != "combined")
+  shannons_lm_p = lm(weighted_unifrac ~ feed, data)
+  summary(aov(shannons_lm_p))
+  output <- TukeyHSD(aov(shannons_lm_p))
+  print("Sample")
+  print(value)
+  print("frequency")
+  print(table(data$feed))
+  print(output)
+}
+sink(file = NULL)
+
+sink(file = "R-BoxPlots/delivery-pvalue.txt")
+for (value in c) {
+  data <- filter(metadata, baby_delivery != "", age == value)
+  shannons_lm_p = lm(weighted_unifrac ~ baby_delivery, data)
+  summary(aov(shannons_lm_p))
+  output <- TukeyHSD(aov(shannons_lm_p))
+  print("Sample")
+  print(value)
+  print("frequency")
+  print(table(data$baby_delivery))
+  print(output)
+}
+sink(file = NULL)
+
+
+### Alpha Using R ###
+
+### Alpha diversity functions
+# Shannon's diversity
+shannons = function(x) {
+  present = x[x > 0]
+  p = present / sum(present)
+  - sum(p * log(p))
+}
+
+### Load data
+taxa_tablexyz = otu_table(physeq_RA)
+
+### Calculate alpha diversity
+metadata$shannons = apply(taxa_tablexyz, 2, shannons)
+alphafeed <- filter(metadata, feed !=
+                      "combined") %>% filter(feed !=
+                                               "") %>% filter(feed != "categorical") %>% drop_na("feed")
+alphafeed <- filter(alphafeed, age_category == "6 months")
+
+alphamode <- filter(metadata, baby_delivery !=
+                      "") %>% filter(feed != "categorical") %>% drop_na("baby_delivery")
+alphamode <- filter(alphamode, age_category == "0.5 months")
+
+ggplot(alphafeed, aes(
+  x = feed,
+  y = as.numeric(shannons),
+  fill = feed
+)) + geom_boxplot() +
+  theme(
+    aspect.ratio = 1,
+    panel.background = element_rect(fill = "white",
+                                    colour = "black"),
+    panel.grid.major = element_line(
+      size = 0.5,
+      linetype = "solid",
+      colour = "grey"
+    ),
+    panel.grid.minor = element_line(
+      size = 0.15,
+      linetype = "solid",
+      colour = "grey"
+    )
+  ) +
+  labs(fill = "Feed") + ylab("Shannon's Diversity Index") +
+  xlab("Feed") + ylim(0, 4) +
+  # colors for the different groups
+  # (here subject 1 and 2)
+  scale_fill_manual(values = c("#1B9E77",
+                               "#D95F02"))
+ggsave(path = "R-DiversityPlots",
+       filename = "Shannon Feed.png")
+ggplot(alphamode,
+       aes(
+         x = baby_delivery,
+         y = as.numeric(shannons),
+         fill = baby_delivery
+       )) +
+  geom_boxplot() + theme(
+    aspect.ratio = 1,
+    panel.background = element_rect(fill = "white",
+                                    colour = "black"),
+    panel.grid.major = element_line(
+      size = 0.5,
+      linetype = "solid",
+      colour = "grey"
+    ),
+    panel.grid.minor = element_line(
+      size = 0.15,
+      linetype = "solid",
+      colour = "grey"
+    )
+  ) +
+  labs(fill = "Delivery") + ylab("Shannon's Diversity Index") +
+  xlab("Delivery") + ylim(0, 5) +
+  # colors for the different groups
+  # (here subject 1 and 2)
+  scale_fill_manual(values = c("#E6AB02",
+                               "#66A61E"))
+ggsave(path = "R-DiversityPlots",
+       filename = "Shannon Mode.png")
+# ANOVA
+sink(file = "R-DiversityPlots/feedalpha-pvalue.txt")
+feed_shannons_lm = lm(shannons ~ feed, data = alphafeed)
+summary(aov(feed_shannons_lm))
+TukeyHSD(aov(feed_shannons_lm))
+sink(file = NULL)
+sink(file = "R-DiversityPlots/modealpha-pvalue.txt")
+mode_shannons_lm = lm(shannons ~ baby_delivery, data = alphamode)
+summary(aov(mode_shannons_lm))
+TukeyHSD(aov(mode_shannons_lm))
+sink(file = NULL)
